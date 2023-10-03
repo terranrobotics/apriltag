@@ -1,10 +1,14 @@
 #ifndef APRILTAG_ROS_APRILTAG_DETECTOR_NODE_H_
 #define APRILTAG_ROS_APRILTAG_DETECTOR_NODE_H_
 
+#include <memory>
+#include <thread>
+
 #include <dynamic_reconfigure/server.h>
 #include <image_transport/image_transport.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
+#include <boost/asio/thread_pool.hpp>
 
 #include "apriltag_ros/apriltag_detector.h"
 #include <apriltag_ros/ApriltagDetectorDynConfig.h>
@@ -37,7 +41,13 @@ private:
   ros::Publisher pub_tags_;
   it::Publisher pub_disp_;
 
-  ApriltagDetectorPtr detector_;
+  // ApriltagDetectorPtr detector_;
+  DetectorType current_detector_type_;
+  TagFamily current_detector_family_;
+  int black_border_;
+  int decimate_;
+  int nthreads_;
+  static thread_local boost::shared_ptr<ApriltagDetector> detector_;
 };
 
 } // namespace apriltag_ros

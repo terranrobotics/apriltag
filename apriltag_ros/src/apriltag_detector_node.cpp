@@ -2,7 +2,7 @@
 
 #include <apriltag_msgs/ApriltagArrayStamped.h>
 #include <boost/thread/lock_guard.hpp>
-#include <boost/asio/thread_pool.hpp>
+#include <boost/asio.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -12,6 +12,8 @@ namespace apriltag_ros {
 
 using namespace sensor_msgs;
 using apriltag_msgs::ApriltagArrayStamped;
+
+thread_local boost::shared_ptr<ApriltagDetector> ApriltagDetectorNode::detector_ = nullptr;
 
 ApriltagDetectorNode::ApriltagDetectorNode(const ros::NodeHandle &pnh)
     : pnh_(pnh), it_(pnh_), cfg_server_(pnh) {
@@ -31,6 +33,15 @@ ApriltagDetectorNode::ApriltagDetectorNode(const ros::NodeHandle &pnh)
 
 void ApriltagDetectorNode::ImageCb(const ImageConstPtr &image_msg) {
   boost::asio::post(*thread_pool_, [this, image_msg]() {
+    // Lazy initialization: if the thread-local detector is not yet created, create one
+    if (!detector_) {
+        // detector_ = std::make_unique<ApriltagDetector>(ApriltagDetector::Create(current_detector_type_, current_detector_family_));
+        detector_ = ApriltagDetector::Create(current_detector_type_, current_detector_family_);
+        detector_->set_black_border(black_border_);
+        detector_->set_decimate(decimate_);
+        detector_->set_nthreads(nthreads_);
+    }
+
     const auto gray =
         cv_bridge::toCvShare(image_msg, image_encodings::MONO8)->image;
 
@@ -51,7 +62,7 @@ void ApriltagDetectorNode::ImageCb(const ImageConstPtr &image_msg) {
       cv_bridge::CvImage cv_img(image_msg->header, image_encodings::BGR8, disp);
       pub_disp_.publish(cv_img.toImageMsg());
     }
-  }
+  });
 }
 
 void ApriltagDetectorNode::ConfigCb(ConfigT &config, int level) {
@@ -62,21 +73,23 @@ void ApriltagDetectorNode::ConfigCb(ConfigT &config, int level) {
   if (level < 0 || config_.type != config.type ||
       config_.family != config.family) {
     // TODO: This maybe unsafe if someone changes the order in cfg
-    detector_ = ApriltagDetector::Create(static_cast<DetectorType>(config.type),
-                                         static_cast<TagFamily>(config.family));
+    current_detector_type_ = static_cast<DetectorType>(config.type);
+    current_detector_family_ = static_cast<TagFamily>(config.family);
   }
-  detector_->set_black_border(config.black_border);
-  detector_->set_decimate(config.decimate);
-  detector_->set_nthreads(config.nthreads);
+  black_border_ = config.black_border;
+  decimate_ = config.decimate;
+  nthreads_ = config.nthreads;
 
   int worker_count = config.worker_count;
   // initialize the threadpool, but also cleanup previous one if needed
-  if (thread_pool_ && thread_pool_->size() != worker_count) {
+  if (thread_pool_) {
     thread_pool_.reset();
   }
-  if (!thread_pool_) {
-    thread_pool_ = std::make_unique<boost::asio::thread_pool>(worker_count);
-  }  
+  thread_pool_.reset(new boost::asio::thread_pool(worker_count));
+
+  // show how many workers we have
+  ROS_INFO("%s: %s", pnh_.getNamespace().c_str(),
+           ("Using " + std::to_string(worker_count) + " workers").c_str());
 
   // Save config
   config_ = config;
