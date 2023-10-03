@@ -28,6 +28,8 @@ private:
   it::ImageTransport it_;
   it::Subscriber sub_image_;
 
+  std::unique_ptr<boost::asio::thread_pool> thread_pool_;
+
   ConfigT config_;
   boost::mutex connect_mutex_;
   dr::Server<ConfigT> cfg_server_;

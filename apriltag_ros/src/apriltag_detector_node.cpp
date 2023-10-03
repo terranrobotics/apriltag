@@ -2,6 +2,7 @@
 
 #include <apriltag_msgs/ApriltagArrayStamped.h>
 #include <boost/thread/lock_guard.hpp>
+#include <boost/asio/thread_pool.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -23,28 +24,33 @@ ApriltagDetectorNode::ApriltagDetectorNode(const ros::NodeHandle &pnh)
   pub_tags_ =
       pnh_.advertise<ApriltagArrayStamped>("tags", 1, connect_cb, connect_cb);
   pub_disp_ = it_.advertise("disp", 1, connect_cb, connect_cb);
+
+  // // Initialize thread pool with 4 threads
+  // thread_pool_ = std::make_unique<boost::asio::thread_pool>(4);
 }
 
 void ApriltagDetectorNode::ImageCb(const ImageConstPtr &image_msg) {
-  const auto gray =
-      cv_bridge::toCvShare(image_msg, image_encodings::MONO8)->image;
+  boost::asio::post(*thread_pool_, [this, image_msg]() {
+    const auto gray =
+        cv_bridge::toCvShare(image_msg, image_encodings::MONO8)->image;
 
-  // Detect
-  auto apriltags = detector_->Detect(gray);
+    // Detect
+    auto apriltags = detector_->Detect(gray);
 
-  // Publish apriltags
-  auto apriltag_array_msg = boost::make_shared<ApriltagArrayStamped>();
-  apriltag_array_msg->header = image_msg->header;
-  apriltag_array_msg->apriltags = apriltags;
-  pub_tags_.publish(apriltag_array_msg);
+    // Publish apriltags
+    auto apriltag_array_msg = boost::make_shared<ApriltagArrayStamped>();
+    apriltag_array_msg->header = image_msg->header;
+    apriltag_array_msg->apriltags = apriltags;
+    pub_tags_.publish(apriltag_array_msg);
 
-  // Publish detection image if needed
-  if (pub_disp_.getNumSubscribers()) {
-    cv::Mat disp;
-    cv::cvtColor(gray, disp, CV_GRAY2BGR);
-    DrawApriltags(disp, apriltags);
-    cv_bridge::CvImage cv_img(image_msg->header, image_encodings::BGR8, disp);
-    pub_disp_.publish(cv_img.toImageMsg());
+    // Publish detection image if needed
+    if (pub_disp_.getNumSubscribers()) {
+      cv::Mat disp;
+      cv::cvtColor(gray, disp, CV_GRAY2BGR);
+      DrawApriltags(disp, apriltags);
+      cv_bridge::CvImage cv_img(image_msg->header, image_encodings::BGR8, disp);
+      pub_disp_.publish(cv_img.toImageMsg());
+    }
   }
 }
 
@@ -62,6 +68,15 @@ void ApriltagDetectorNode::ConfigCb(ConfigT &config, int level) {
   detector_->set_black_border(config.black_border);
   detector_->set_decimate(config.decimate);
   detector_->set_nthreads(config.nthreads);
+
+  int worker_count = config.worker_count;
+  // initialize the threadpool, but also cleanup previous one if needed
+  if (thread_pool_ && thread_pool_->size() != worker_count) {
+    thread_pool_.reset();
+  }
+  if (!thread_pool_) {
+    thread_pool_ = std::make_unique<boost::asio::thread_pool>(worker_count);
+  }  
 
   // Save config
   config_ = config;
